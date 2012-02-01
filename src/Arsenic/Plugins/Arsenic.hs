@@ -162,13 +162,12 @@ defaultHook EventInfo{evtPkt=pkt, evtType=evt, evtNs=ns'} =
          DAmnServer ->
              do putNotice ("Server version is "<+>pktParam pkt) ""
                 putNotice "Logging in..." ""
-                name <- withSettings $ getSetting "bot.username" 
-                pass <- withSettings $ getSetting "bot.password" 
-                token <- gets cSettings >>= return . evalState (runErrorT 
-                       $ do token <- getSetting "bot.token"
-                            when (L.null token) . throwError $ SettingsError "null token"
-                            return token)
-                            
+                name <- withSettingsIO $ getSetting "bot.username" 
+                pass <- withSettingsIO $ getSetting "bot.password" 
+                token <- withSettings $
+                    do token <- getSetting "bot.token"
+                       when (L.null token) . throwError $ SettingsError "null token"
+                       return token
                 case token of
                   Right t -> dAmnLogin name t
                   Left (SettingsError e) ->
@@ -187,8 +186,8 @@ defaultHook EventInfo{evtPkt=pkt, evtType=evt, evtNs=ns'} =
                   "authentication failed" ->
                       do putErr ("Authentication failed! We better get\
                                  \ another authtoken.") ""
-                         name <- withSettings $ getSetting "bot.username"
-                         pass <- withSettings $ getSetting "bot.password" 
+                         name <- withSettingsIO $ getSetting "bot.username"
+                         pass <- withSettingsIO $ getSetting "bot.password" 
                          token <- liftIO $ getAuthToken name pass True
                          case token of
                            Just t -> saveToken t
@@ -205,9 +204,7 @@ defaultHook EventInfo{evtPkt=pkt, evtType=evt, evtNs=ns'} =
                                                       \ can't connect right\
                                                       \ now!" ""
                                                quitClient
-                  "ok" -> do withSettings (liftM (read :: String -> [ByteString]) $ getSettingStr "bot.autojoin") 
-                              >>= formatList
-                              >>= mapM_ dAmnJoin
+                  "ok" -> gets cAutojoin >>= formatList >>= mapM_ dAmnJoin
          PropertyTopic -> gotHeader
          PropertyTitle -> gotHeader
          PropertyMembers ->
@@ -262,10 +259,10 @@ defaultHook EventInfo{evtPkt=pkt, evtType=evt, evtNs=ns'} =
 -- | This hook allows the user to perform commands.
 commandsHook :: EventHook
 commandsHook evt@EventInfo{evtPkt=pkt, evtFrom=from, evtNs=ns} =
-    do trig <- withSettings $ getSetting "bot.trigger"
+    do trig <- withSettingsIO $ getSetting "bot.trigger"
        plugs <- gets cPlugins
        users <- gets cUsers 
-       name <- withSettings $ getSetting "bot.username" 
+       name <- withSettingsIO $ getSetting "bot.username" 
        let msg = pktBody $ subPkt pkt
            key = L.drop (L.length trig) . head $ L.words msg
            privs = case M.lookup from users of

@@ -1,10 +1,12 @@
-{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ExistentialQuantification, MultiParamTypeClasses #-}
 
 module Arsenic.Types (
     DAmnNetwork(..),
     Network(..),
     NetworkIO,
-    SettingsContainer(..),
+    ErrorState,
+    SettingsStorer(..),
+    Settings,
     SettingsFile(..),
     SettingsError(..),
     Client(..),
@@ -43,6 +45,7 @@ import Data.Map (Map)
 import Data.ByteString.Lazy.Char8 (ByteString)
 import Data.ConfigFile (ConfigParser)
 import Control.Monad.Error (Error)
+import qualified Data.ByteString.Lazy.Char8 as L
 
 -- | This data type is used to manage the connection to a dAmn server.
 data Network = 
@@ -69,6 +72,8 @@ data Namespace =
 type MemberList = Map ByteString Member
 
 type PcList = Map ByteString ByteString
+
+type AutojoinList = [ByteString]
 
 -- | An account on the dAmn server. This information pertains to one namespace.
 data Member =
@@ -119,13 +124,42 @@ data SettingsFile =
 -- | This type holds the errors that occur when dealing with settings.
 newtype SettingsError = SettingsError { settingsError :: String }
 
-type SettingsContainer = ErrorT SettingsError (State SettingsFile)
+-- | A combination of ErrorT monad using e as the error and @State@ as the
+-- innerlying monad, s being its environment.
+type ErrorState e s = ErrorT e (State s)
+
+-- | The default settings monad type.
+type Settings = ErrorState SettingsError SettingsFile
+
+-- | A class for datatypes that manage settings. A complete implementation
+-- requires either @getSettingStr@ or @getSetting@, and either @putSettingStr@
+-- or @putSetting@.
+class Error e => SettingsStorer e s where
+    -- | Retrieve a setting from the settings storer with @String@s.
+    getSettingStr :: String                -- ^ The name of the setting.
+                  -> ErrorState e s String -- ^ The value of the setting.
+    getSettingStr = liftM L.unpack . getSetting . L.pack
+    -- | Retrieve a setting from the settings storer with @ByteString@s.
+    getSetting :: ByteString                -- ^ The name of the setting.
+               -> ErrorState e s ByteString -- ^ The value of the setting.
+    getSetting = liftM L.pack . getSettingStr . L.unpack
+    -- | Add a setting to the settings storer with @String@s.
+    putSettingStr :: String   -- ^ The name of the setting.
+                  -> String   -- ^ The value of the setting.
+                  -> ErrorState e s ()
+    putSettingStr name val = putSetting (L.pack name) (L.pack val)
+    -- | Add a setting to the settings storer with @ByteString@s.
+    putSetting :: ByteString   -- ^ The name of the setting.
+               -> ByteString   -- ^ The value of the setting.
+               -> ErrorState e s ()
+    putSetting name val = putSettingStr (L.unpack name) (L.unpack val) 
 
 -- | This holds the client's state.
 data Client =
     Client { cSettings   :: SettingsFile -- ^ The client's settings.
            , cUsers      :: UserList     -- ^ The user list.
            , cGroups     :: GroupList    -- ^ The group list.
+           , cAutojoin   :: AutojoinList -- ^ The bot's autojoin list.
            , cVersion    :: ByteString   -- ^ The client's version.
            , cNetwork    :: Network      -- ^ The network the client is connected to
            , cQuit       :: Bool         -- ^ Whether or not to quit.

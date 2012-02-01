@@ -1,4 +1,6 @@
-{-# LANGUAGE TypeSynonymInstances, OverloadedStrings #-}
+{-# LANGUAGE TypeSynonymInstances, OverloadedStrings, MultiParamTypeClasses #-}
+-- Intentional compilation error
+--TODO: Turn autojoin list into a [ByteString] and use it accordingly with all of the modules
 
 -- Arsenic's client, and related code
 module Arsenic.Client (
@@ -17,11 +19,12 @@ module Arsenic.Client (
     cLoadSettings,
     cSaveSettings,
     runSetup,
+    withSettings,
+    withSettingsIO,
     getSetting,
     getSettingStr,
     putSetting,
     putSettingStr,
-    withSettings,
     setNamespace,
     setNsList,
     -- ** Running the client
@@ -80,20 +83,24 @@ instance DAmnNetwork ClientIO where
 instance Error SettingsError where
     strMsg = SettingsError
 
+instance SettingsStorer SettingsError SettingsFile where
+    getSettingStr = getSettingStr'
+    putSettingStr = putSettingStr'
+
 -- | Retrieve a setting from the settings file with @String@s.
-getSettingStr :: String   -- ^ The name of the setting.
-              -> SettingsContainer String -- ^ The value of the setting.
-getSettingStr name =
+getSettingStr' :: String   -- ^ The name of the setting.
+              -> Settings String -- ^ The value of the setting.
+getSettingStr' name =
     let (section, option) = settingsVarName name 
     in do cp <- lift (gets sfParser)
           either settingsErrStr return
             $ CF.get cp section option
 
 -- | Add a setting to the settings file with @String@s.
-putSettingStr :: String   -- ^ The name of the setting.
+putSettingStr' :: String   -- ^ The name of the setting.
               -> String   -- ^ The value of the setting.
-              -> SettingsContainer () 
-putSettingStr name val =
+              -> Settings () 
+putSettingStr' name val =
     let (section, option) = settingsVarName name
     in do cp <- lift (gets sfParser)
           either settingsErrStr (\cp' -> lift (modify $ \s -> s {sfParser=cp'}))
@@ -101,7 +108,7 @@ putSettingStr name val =
 
 -- | Add a section to the settings file using a @String@.
 addSectionStr :: String  -- ^ The name of the new section.
-              -> SettingsContainer ()
+              -> Settings ()
 addSectionStr section =
     do cp <- lift (gets sfParser)
        either settingsErrStr (\cp' -> lift (modify $ \s -> s {sfParser=cp'}))
@@ -109,34 +116,46 @@ addSectionStr section =
 
 -- | Add a section to the settings file using a @ByteString@.
 addSection :: ByteString  -- ^ The name of the new section
-              -> SettingsContainer ()
+              -> Settings ()
 addSection = addSectionStr . L.unpack
 
--- | Retrieve a setting from the settings file with @ByteString@s.
+{-- | Retrieve a setting from the settings file with @ByteString@s.
 getSetting :: ByteString   -- ^ The name of the setting.
-           -> SettingsContainer ByteString -- ^ The value of the setting.
+           -> Settings ByteString -- ^ The value of the setting.
 getSetting = liftM L.pack . getSettingStr . L.unpack
 
--- | Add a setting to the settings file with @ByeString@s.
+-- | Add a setting to the settings file with @ByteString@s.
 putSetting :: ByteString   -- ^ The name of the setting.
            -> ByteString   -- ^ The value of the setting.
-           -> SettingsContainer () 
-putSetting name val = putSettingStr (L.unpack name) (L.unpack val)
+           -> Settings () 
+putSetting name val = putSettingStr (L.unpack name) (L.unpack val) --}
 
 settingsVarName :: String -> (String, String)
 settingsVarName name = fmap (drop 1) $ break (=='.') name
 
-settingsErrStr :: CF.CPError -> SettingsContainer a
+settingsErrStr :: CF.CPError -> Settings a
 settingsErrStr (errType, location) = throwError . SettingsError $ show errType ++ ": " ++ location
 
--- | Perform operations on the @SettingsFile@ in the @Client@ datatype.
-withSettings :: SettingsContainer a -> ClientIO a
+-- | Perform operations on the @SettingsFile@ in the @Client@.
+withSettings :: Settings a -> ClientIO (Either SettingsError a)
 withSettings sc =
-    do (err, s) <- gets cSettings >>= return . runState (runErrorT sc)
+    do (err, s) <- gets cSettings >>= return . runSettings sc
        case err of
-         Left (SettingsError e) -> do liftIO $ error e
-         Right result -> do modify $ \c -> c {cSettings = s}
-                            return result
+         Right _ -> modify $ \c -> c {cSettings=s}
+         _       -> return ()
+       return err
+
+-- | Perform operations on the @SettingsFile@ in the @Client@,
+-- handling errors with @IO@.
+withSettingsIO :: Settings a -> ClientIO a
+withSettingsIO sc = do err <- withSettings sc
+                       either (liftIO . error . settingsError) (return . id) err
+
+-- | Get the result of running a @Settings@.
+runSettings :: Settings a    -- ^ The Settings monad.
+            -> SettingsFile  -- ^ The initial state.
+            -> (Either SettingsError a, SettingsFile) -- ^ The result. 
+runSettings sc = runState (runErrorT sc)
 
 -- | Print a message to the screen and log it.
 putMsg', putMsg :: ByteString
@@ -147,7 +166,7 @@ putMsg', putMsg :: ByteString
 putMsg' msg ns = 
      -- We use a timestamp in the messages we print, so we grab the timestamp in
      -- strftime() format from the settings, the timezone, and the epoch time. 
-     do ts <- liftM L.unpack $ withSettings (getSetting "bot.timezone") 
+     do ts <- liftM L.unpack $ withSettingsIO (getSetting "bot.timezone") 
         timezone <- liftIO getCurrentTimeZone
         utc <- liftIO getCurrentTime
         let localTime = utcToLocalTime timezone utc
@@ -168,7 +187,7 @@ logMsg', logMsg :: ByteString
 logMsg' msg ns =
      -- We use a timestamp in the messages we print, so we grab the timestamp in
      -- strftime() format from the settings, the timezone, and the epoch time. 
-     do ts <- liftM L.unpack $ withSettings (getSetting "bot.timezone") 
+     do ts <- liftM L.unpack $ withSettingsIO (getSetting "bot.timezone") 
         timezone <- liftIO getCurrentTimeZone
         utc <- liftIO getCurrentTime
         let localTime = utcToLocalTime timezone utc
@@ -288,7 +307,7 @@ runSetup =
                                , sNetName=undefined }
            group level name = (level, PrivGroup level name)--}
        let settings =
-             do mapM addSection ["bot", "server", "user"]
+             do mapM_ addSection ["bot", "server", "user"]
                 putSettingStr "bot.username" username
                 putSettingStr "bot.password" password
                 putSettingStr "bot.owner" owner
@@ -347,14 +366,17 @@ makeClient s =
                     let netName' = if L.null netName then Nothing else Just netName
                     groups <- getSettingStr "user.groups"
                     users <- getSettingStr "user.users"
-                    return (domain, read port, netName', groups, users)) s
+                    join <- liftM (read :: String -> [ByteString])
+                          $ getSettingStr "bot.autojoin"
+                    return (domain, read port, netName', groups, users, join)) s
     in case config of
-         Right (domain, port, netName, groups, users) ->
+         Right (domain, port, netName, groups, users, join) ->
            do net <- makeNetwork domain port netName
               return $ Client { cVersion="0.3.0"
                               , cSettings=s
                               , cUsers=M.fromList $ read users
                               , cGroups=M.fromList $ read groups
+                              , cAutojoin=join
                               , cNetwork=net
                               , cQuit=False
                               , cReconnect=False
@@ -365,20 +387,20 @@ makeClient s =
 
 -- | Deform a channel using the username from a client.
 deformChan :: ByteString -> ClientIO ByteString
-deformChan chan = withSettings (getSetting "bot.username") >>= return . deformChanName chan
+deformChan chan = withSettingsIO (getSetting "bot.username") >>= return . deformChanName chan
 
 -- | Format a channel using the username from a client.
 formatChan :: ByteString -> ClientIO ByteString
-formatChan chan = withSettings (getSetting "bot.username") >>= return . formatChanName chan
+formatChan chan = withSettingsIO (getSetting "bot.username") >>= return . formatChanName chan
 
 -- | Deform a list of channels using the username from a client.
 formatList :: [ByteString] -> ClientIO [ByteString]
-formatList xs = do name <- withSettings (getSetting "bot.username") 
+formatList xs = do name <- withSettingsIO (getSetting "bot.username") 
                    return $ map (flip formatChanName name) xs
 
 -- | Deform a list of channels using the username from a client.
 deformList :: [ByteString] -> ClientIO [ByteString]
-deformList xs = do name <- withSettings (getSetting "bot.username") 
+deformList xs = do name <- withSettingsIO (getSetting "bot.username") 
                    return $ map (flip deformChanName name) xs
 
 -- | Log in on deviantART and return the recieved authtoken using cURL.

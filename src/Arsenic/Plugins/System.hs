@@ -67,8 +67,8 @@ autoJoinHelp =
 aboutCmd :: CommandHook
 aboutCmd EventInfo{evtNs=ns, evtFrom=from} _ =
     do ver <- gets cVersion
-       owner <- withSettings $ getSetting "bot.owner"
-       about <- withSettings $ getSetting "bot.about"
+       owner <- withSettingsIO $ getSetting "bot.owner"
+       about <- withSettingsIO $ getSetting "bot.about"
        dAmnSay ns . replace "%owner%" owner
                   . replace "%ver%" ver
                   $ replace "%os%" operatingSystem about
@@ -132,9 +132,12 @@ quitCmd EventInfo{evtNs=ns, evtFrom=from} _ =
 
 autoJoinCmd :: CommandHook
 autoJoinCmd evt@EventInfo{evtNs=ns, evtFrom=from} args =
-    do let saveList list = withSettings . putSetting "bot.autojoin" $ commaJoin list
+    do let saveList list =
+               do withSettingsIO . putSettingStr "bot.autojoin" $ show list
+                  list' <- formatList list
+                  modify $ \c -> c {cAutojoin=list'}
            autoJoinHelp = helpCmd evt ["autojoin"]
-       autoJoin <- withSettings $ liftM (tokenise ", ") $ getSetting "bot.autojoin" 
+       autoJoin <- gets cAutojoin 
        if length args > 0
           then case args of
                  "add":chans ->
@@ -187,7 +190,7 @@ autoJoinCmd evt@EventInfo{evtNs=ns, evtFrom=from} args =
 helpCmd :: CommandHook
 helpCmd EventInfo{evtNs=ns, evtFrom=from} args =
     if length args > 0
-       then do trig <- withSettings $ getSetting "bot.trigger" 
+       then do trig <- withSettingsIO $ getSetting "bot.trigger" 
                plugs <- gets (M.elems . cPlugins)
                let name = head args
                    cmdList = foldr1 M.union $ map getPlugCmds plugs
