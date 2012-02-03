@@ -160,8 +160,6 @@ autoJoinCmd evt@EventInfo{evtNs=ns, evtFrom=from} args =
                  "del":chans ->
                      do chans' <- formatList chans
                         deformedList <- deformList chans
-                        liftIO . L.putStrLn $ "Chans: " <+> L.unwords chans'
-                        liftIO . L.putStrLn $ "Autojoin: " <+> L.unwords autoJoin
                         case length chans of
                           1 -> let channel = head chans'
                                    deformed = head deformedList

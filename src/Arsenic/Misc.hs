@@ -108,14 +108,14 @@ subIndex sub list = findIndex (isPrefixOf sub) (tails list)
 subIndexBS sub str = findIndex (L.isPrefixOf sub) (L.tails str)
 
 -- | Join a list of @ByteString@s with commas
-commaJoin :: [L.ByteString] -> L.ByteString
+commaJoin :: [ByteString] -> ByteString
 commaJoin = L.intercalate ", "
 
 -- | Join a list of @ByteStrings@s with commas and end the list with "and"
-andJoin :: [L.ByteString] -> L.ByteString
+andJoin :: [ByteString] -> ByteString
 andJoin list
     | length list > 2 = let (front, [back]) = splitAt (length list - 1) list
                         in commaJoin front <+> " and " <+> back
-    | length list == 2 = head list <+> "and" <+> last list
+    | length list == 2 = head list <+> " and " <+> last list
     | length list == 1 = head list
     | null list = ""
