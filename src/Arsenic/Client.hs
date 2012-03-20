@@ -1,6 +1,4 @@
 {-# LANGUAGE TypeSynonymInstances, OverloadedStrings, MultiParamTypeClasses #-}
--- Intentional compilation error
---TODO: Turn autojoin list into a [ByteString] and use it accordingly with all of the modules
 
 -- Arsenic's client, and related code
 module Arsenic.Client (
@@ -21,6 +19,7 @@ module Arsenic.Client (
     runSetup,
     withSettings,
     withSettingsIO,
+    addSection,
     getSetting,
     getSettingStr,
     putSetting,
@@ -89,7 +88,7 @@ instance SettingsStorer SettingsError SettingsFile where
 
 -- | Retrieve a setting from the settings file with @String@s.
 getSettingStr' :: String   -- ^ The name of the setting.
-              -> Settings String -- ^ The value of the setting.
+               -> Settings String -- ^ The value of the setting.
 getSettingStr' name =
     let (section, option) = settingsVarName name 
     in do cp <- lift (gets sfParser)
@@ -98,8 +97,8 @@ getSettingStr' name =
 
 -- | Add a setting to the settings file with @String@s.
 putSettingStr' :: String   -- ^ The name of the setting.
-              -> String   -- ^ The value of the setting.
-              -> Settings () 
+               -> String   -- ^ The value of the setting.
+               -> Settings () 
 putSettingStr' name val =
     let (section, option) = settingsVarName name
     in do cp <- lift (gets sfParser)

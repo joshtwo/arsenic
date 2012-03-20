@@ -286,7 +286,7 @@ commandsHook evt@EventInfo{evtPkt=pkt, evtFrom=from, evtNs=ns} =
        if L.take (L.length trig) msg == trig
           then search . M.elems $ M.map (\p -> (p,getPlugCmds p)) plugs
           else if msg == (name <+> ": trigcheck")
-                  then dAmnSay ns $ from <+> ": My trigger is <code>" <+> trig
+                  then dAmnSayTo ns from $ "My trigger is <code>" <+> trig
                   else return ()
        where args = tail . L.words . pktBody $ subPkt pkt
 

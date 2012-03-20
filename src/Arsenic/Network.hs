@@ -18,6 +18,7 @@ module Arsenic.Network (
     dAmnTopic,
     dAmnTitle,
     dAmnSay,
+    dAmnSayTo,
     dAmnBan,
     dAmnUnban,
     dAmnKick,
@@ -196,6 +197,14 @@ dAmnSay chan msg = netSend $ "send " <+> chan <+> "\n\n" <+>
                      (if L.take 4 msg == "/me "
                          then "action main\n\n" <+> L.drop 4 msg
                          else "msg main\n\n" <+> msg) <+> "\0"
+
+-- | Tab someone when sending a message to them. 
+dAmnSayTo :: DAmnNetwork n
+          => ByteString -- ^ The channel to send the message to.
+          -> ByteString -- ^ The person to direct the message to.
+          -> ByteString -- ^ The message to send.
+          -> n ()
+dAmnSayTo chan person = dAmnSay chan . ((person <+> ": ") <+>) 
 
 -- | Send a non-parsed message. Usage is the same as 'dAmnSay', except you
 -- are not able to send an action by prefixing the message with @"/me"@.

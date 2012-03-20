@@ -3,9 +3,11 @@
 module Arsenic.Plugins.System (systemPlugin) where
 
 import Control.Monad.State
+import Control.Monad.Error
 import System.Info (os, arch)
 import Data.List
 import Data.Ord
+import Data.Char
 import Debug.Trace (trace)
 import qualified Data.ByteString.Lazy.Char8 as L
 import qualified Data.Map as M
@@ -40,7 +42,8 @@ systemInit :: Plugin -> ClientIO Plugin
 systemInit plug = modifyPlugin_ plug $
     do addCmdList
          [ ("about", 0, aboutCmd)
-         , ("commands", 0, cmdsCmd)
+         , ("commands", 0, commandsCmd)
+         , ("commands-by", 0, commandsByCmd)
          , ("quit", 100, quitCmd)
          , ("autojoin", 100, autoJoinCmd)
          , ("help", 0, helpCmd) ]
@@ -78,13 +81,49 @@ aboutCmd EventInfo{evtNs=ns, evtFrom=from} _ =
                                   "darwin" -> "Mac OS X"
                                   _ -> L.pack os) <+> " " <+> L.pack arch
 
-cmdsCmd :: CommandHook
-cmdsCmd EventInfo{evtNs=ns, evtFrom=from} args =
+commandsCmd :: CommandHook
+commandsCmd evt@EventInfo{evtNs=ns, evtFrom=from} args =
+        case args of
+          "default":xs ->
+              do admin <- withSettingsIO $ getSetting "bot.owner"
+                 if from == admin
+                    then let newMode = head xs
+                         in if null xs
+                               then showMode 
+                               else if newMode `elem` ["plugin", "privs"]
+                                       then withSettingsIO (putSetting "system.displaymode" newMode) 
+                                         >> say ("The display mode has been set to <b>" <+> newMode <+> "</b>.")
+                                       else say "Invalid mode. You must set it to <i>privs</i> or <i>plugin</b>."
+                    else say "You do not have the privileges to modify this setting."
+          _ -> cmdsByDefault evt
+          where say = dAmnSayTo ns from
+                showMode = 
+                    do mode <- withSettings $ getSetting "system.displaymode"
+                       case mode of
+                         Left _ ->
+                             do setDefaultMode 
+                                say $ "The current default display mode is <b>privs</b>."
+                         Right mode' ->
+                             say $ "The current default display mode is <b>" <+> mode' <+> "</b>."
+
+commandsByCmd :: CommandHook
+commandsByCmd evt@EventInfo{evtNs=ns, evtFrom=from} args =
     do plugs <- gets cPlugins
-       dAmnSay ns $ "<abbr title=\"" <+> from <+> "\"></abbr>"
-        <+> case args of
-              "by-plugin":_ -> cmdsByPlugin plugs
-              _ -> cmdsByPrivs plugs
+       case args of
+         "plugin":_ -> send $ cmdsByPlugin plugs
+         "privs":_ -> send $ cmdsByPrivs plugs
+         _ -> dAmnSayTo ns from "You must provide a valid display mode: <i>privs</i> or <i>plugin</i>."
+         where send = dAmnSay ns . (("<abbr title=\"" <+> from <+> "\"></abbr>") <+>)
+
+cmdsByDefault evt =
+    do mode <- withSettings $ getSetting "system.displaymode"
+       case mode of
+         Left _ -> do setDefaultMode 
+                      commandsByCmd evt ["privs"]
+         Right mode' -> commandsByCmd evt [mode']
+
+setDefaultMode = catchError (withSettingsIO $ addSection "system") (\_ -> return ())
+              >> withSettingsIO (putSetting "system.displaymode" "privs")
 
 -- This is ran when commands are displayed by plugin
 cmdsByPlugin :: PluginList -> L.ByteString
@@ -127,7 +166,7 @@ cmdsByPrivs plugs =
 
 quitCmd :: CommandHook
 quitCmd EventInfo{evtNs=ns, evtFrom=from} _ =
-    do dAmnSay ns $ from <+> ": Quitting dAmn."
+    do dAmnSayTo ns from "Quitting dAmn."
        quitClient
 
 autoJoinCmd :: CommandHook
@@ -137,6 +176,19 @@ autoJoinCmd evt@EventInfo{evtNs=ns, evtFrom=from} args =
                   list' <- formatList list
                   modify $ \c -> c {cAutojoin=list'}
            autoJoinHelp = helpCmd evt ["autojoin"]
+           -- does a case insensitive delete 
+           delete' item list =
+               let list' = map (L.map toLower) list
+                   item' = L.map toLower item
+               in case elemIndex item' list' of
+                    Just pos ->
+                        let front = take pos list
+                            back = drop (pos+1) list
+                        in front ++ back
+                    Nothing -> list
+           (\\\) [] items = []
+           (\\\) list [] = list
+           (\\\) list (x:xs) = delete x list \\\ xs
        autoJoin <- gets cAutojoin 
        if length args > 0
           then case args of
@@ -144,12 +196,12 @@ autoJoinCmd evt@EventInfo{evtNs=ns, evtFrom=from} args =
                      do chans' <- deformList chans
                         saveList $ autoJoin `union` chans'
                         if length chans > 1
-                           then dAmnSay ns
-                              $ from <+> ": Channels "
+                           then dAmnSayTo ns from
+                              $ "Channels "
                             <+> L.intercalate ", " (init chans') <+> " and "
                             <+> last chans' <+> " were added to the autojoin list."
-                           else dAmnSay ns
-                              $ from <+> ": Channel " <+> head chans'
+                           else dAmnSayTo ns from
+                              $ "Channel " <+> head chans'
                             <+> " was added to the autojoin list."
                  "list":_ ->
                      do list <- deformList autoJoin
@@ -163,23 +215,25 @@ autoJoinCmd evt@EventInfo{evtNs=ns, evtFrom=from} args =
                         case length chans of
                           1 -> let channel = head chans'
                                    deformed = head deformedList
-                               in if channel `elem` autoJoin
-                                     then do saveList $ delete channel autoJoin
-                                             dAmnSay ns $ from <+> ": Channel "
+                                   channel' = L.map toLower channel
+                                   autoJoin' = map (L.map toLower) autoJoin
+                               in if elem channel' autoJoin' 
+                                     then do saveList $ delete' channel autoJoin
+                                             dAmnSay ns $ from <+> "Channel "
                                               <+> deformed
                                               <+> " was deleted from the autojoin\
                                                   \ list."
-                                     else dAmnSay ns $ from <+> ": Channel "
+                                     else dAmnSayTo ns from $ "Channel "
                                       <+> deformed <+> " is not in the list."
-                          0 -> dAmnSay ns $ from <+> ": You did not specify a\
-                                                      \ channel to delete."
-                          _ -> if and $ map (`elem` autoJoin) chans'
-                                  then do saveList $ autoJoin \\ chans'
-                                          dAmnSay ns $ from <+> ": Channels "
+                          0 -> dAmnSayTo ns from
+                             $ "You did not specify a channel to delete."
+                          _ -> if and $ map ((`elem` autoJoin) . L.map toLower) chans'
+                                  then do saveList $ autoJoin \\\ chans'
+                                          dAmnSayTo ns from $ "Channels "
                                            <+> andJoin deformedList
                                            <+> " were removed from the autojoin\
                                                \ list."
-                                  else dAmnSay ns $ from <+> ": The channels "
+                                  else dAmnSayTo ns from $ "The channels "
                                    <+> andJoin deformedList
                                    <+> " are not in the list."
                  _ -> autoJoinHelp 
@@ -193,17 +247,15 @@ helpCmd EventInfo{evtNs=ns, evtFrom=from} args =
                let name = head args
                    cmdList = foldr1 M.union $ map getPlugCmds plugs
                case M.lookup name cmdList of
-                 Nothing -> dAmnSay ns
-                          $ from <+> ": The command \"" <+> name <+> "\" does \
-                                     \ not exist."
+                 Nothing -> dAmnSayTo ns from
+                          $ "The command \"" <+> name <+> "\" does not exist."
                  Just cmd ->
                      case cmdHelp cmd of
-                       Nothing -> dAmnSay ns
-                                $ from <+> ": There is no documentation for\
-                                           \ the \"" <+> name <+> "\" command."
+                       Nothing -> dAmnSayTo ns from
+                                $ "There is no documentation for the \"" <+> name <+> "\" command."
                        Just docs -> dAmnSay ns . showDocs $
                            do addDocSub "$t" trig
                               addDocSub "$c" name
                               setDocTitle ("Help for \"" <+> name <+>"\"")
                               docs
-       else dAmnSay ns $ from <+> ": You must specify a command to get help on."
+       else dAmnSayTo ns from "You must specify a command to get help on."

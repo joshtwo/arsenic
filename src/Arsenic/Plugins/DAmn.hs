@@ -34,11 +34,17 @@ dAmnPlugin = DAmnPlugin M.empty M.empty
 dAmnInit :: Plugin -> ClientIO Plugin
 dAmnInit plug = modifyPlugin_ plug $
     do addCmdList
-         [ ("join", 100, joinCmd)
-         , ("part", 100, partCmd)
-         , ("say", 100, sayCmd)
-         , ("reconnect", 100, reconnectCmd) ]
-       addCmdHelp "say" sayHelp
+         [ ("join", 50, joinCmd)
+         , ("part", 50, partCmd)
+         , ("say", 50, sayCmd)
+         , ("reconnect", 100, reconnectCmd)
+         , ("raw", 100, rawCmd) ]
+       mapM_ (uncurry addCmdHelp)
+         [ ("say", sayHelp)
+         , ("join", joinPartHelp)
+         , ("part", joinPartHelp)
+         , ("reconnect", reconnectHelp)
+         , ("raw", rawHelp) ]
 
 sayHelp :: DocMaker
 sayHelp =
@@ -49,31 +55,52 @@ sayHelp =
          , ("$t$c #<i>room</i> <i>message</i>",
             "Send the message <i>message</i> to the channel #<i>room</i>.") ]
 
+joinPartHelp :: DocMaker
+joinPartHelp =
+    do addDocLine "Makes the bot $c channels."
+       addAssocList
+         [ ("$t$c #<i>channel</i>",
+            "Make the bot $c a channel. You can also specify more than one channel to\
+            \ $c, e.g <code>$t$c #channel1 #channel2 #channel3</code>") ]
+
+reconnectHelp :: DocMaker
+reconnectHelp = addDocLine "Disconnects, then reconnects to dAmn."
+
+rawHelp :: DocMaker
+rawHelp =
+    do addDocLine "Sends a raw packet over dAmn."
+       addAssocList [("$t$c <i>packet</i>", "Send the text <i>packet</i>.")]
+
 joinCmd :: CommandHook
 joinCmd EventInfo{evtNs=ns, evtFrom=from} args =
     if not $ null args
-       then formatChan (head args) >>= dAmnJoin
-       else dAmnSay ns
-          $ from <+> ": You need to specify a channel to join."
+       then formatList args >>= mapM_ dAmnJoin
+       else dAmnSayTo ns from "You need to specify a channel to join."
 
 partCmd :: CommandHook
 partCmd EventInfo{evtNs=ns} args =
     if not $ null args
-       then formatChan (head args) >>= dAmnPart
+       then formatList args >>= mapM_ dAmnPart
        else dAmnPart ns
 
 sayCmd :: CommandHook
-sayCmd EventInfo{evtPkt=pkt} args =
+sayCmd EventInfo{evtNs=ns, evtFrom=from} args =
     if not $ null args
        then let chan = head args
             in if L.head chan == '#' && length args > 1
                   then formatChan chan
                    >>= flip dAmnSay (L.unwords $ tail args)
-                  else dAmnSay (pktParam pkt) $ L.unwords args
-       else dAmnSay (pktParam pkt)
-          $ subPkt pkt ? "from" <+> ": You need to give something to say."
+                  else dAmnSay ns $ L.unwords args
+       else dAmnSayTo ns from "You need to give something to say."
 
 reconnectCmd :: CommandHook
 reconnectCmd EventInfo{evtNs=ns, evtFrom=from} _ =
-    do dAmnSay ns $ from <+> ": Restarting client. Be right back!"
+    do dAmnSayTo ns from "Restarting client. Be right back!"
        reconnectClient
+
+rawCmd :: CommandHook
+rawCmd EventInfo{evtNs=ns, evtFrom=from, evtPkt=pkt} args =
+    if not $ L.null body
+       then netSend $ replace "\\n" "\n" body <+> "\0" 
+       else dAmnSayTo ns from "You must give a packet to send."
+       where body = pktBody $ subPkt pkt
